@@ -1,0 +1,130 @@
+---
+- name: Configure Debian 10 and install PostgreSQL 16
+  hosts: debian_10
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  tasks:
+    - name: Update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install common packages
+      apt:
+        name:
+          - vim
+          - curl
+          - git
+          - htop
+          - net-tools
+          - unzip
+          - wget
+        state: present
+
+    - name: Add PostgreSQL APT repository key
+      apt_key:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        state: present
+
+    - name: Add PostgreSQL APT repository
+      apt_repository:
+        repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+        state: present
+
+    - name: Update apt cache after adding PostgreSQL repository
+      apt:
+        update_cache: yes
+
+    - name: Install PostgreSQL 16
+      apt:
+        name: postgresql-16
+        state: present
+
+    - name: Ensure PostgreSQL service is enabled and started
+      service:
+        name: postgresql
+        enabled: yes
+        state: started
+
+    - name: Install psycopg2 for PostgreSQL
+      apt:
+        name: python3-psycopg2
+        state: present
+
+    - name: Set password for PostgreSQL user 'postgres'
+      become_user: postgres
+      postgresql_user:
+        db: postgres
+        name: postgres
+        password: Qq12345
+
+    - name: Check if database exists
+      command: "psql -U postgres -lqt | cut -d \\| -f 1 | grep -qw \"db_test_ansible\""
+      ignore_errors: true
+      register: db_check_result
+      failed_when: false
+
+    - name: Create PostgreSQL database if not exists
+      become_user: postgres
+      command: "createdb -U postgres db_test_ansible"
+      when: db_check_result.rc != 0
+      failed_when: false
+
+    - name: Initialize database schema
+      become_user: postgres
+      postgresql_query:
+        db: db_test_ansible
+        query: |
+          CREATE TABLE IF NOT EXISTS e_table(
+            id SERIAL PRIMARY KEY,
+            email VARCHAR(100) NOT NULL
+          );
+          CREATE TABLE IF NOT EXISTS pn_table(
+            id SERIAL PRIMARY KEY,
+            phone_number VARCHAR(100) NOT NULL
+          );
+
+    - name: Ensure directory /oracle/pg_data/archive/ exists
+      file:
+        path: /oracle/pg_data/archive/
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0755'
+
+    - name: Modify PostgreSQL configuration file
+      blockinfile:
+        path: /etc/postgresql/16/main/postgresql.conf
+        block: |
+          listen_addresses = '*'
+          port = 5432
+          archive_mode = on
+          archive_command = 'cp %p /oracle/pg_data/archive/%f'
+          max_wal_senders = 10
+          wal_level = replica
+          wal_log_hints = on
+          log_replication_commands = on
+
+    - name: Configure pg_hba.conf
+      lineinfile:
+        path: "/etc/postgresql/16/main/pg_hba.conf"
+        insertafter: EOF
+        line: "host all all 0.0.0.0/24 scram-sha-256"
+
+    - name: Change permissions for PostgreSQL log file
+      file:
+        path: /var/log/postgresql/postgresql-16-main.log
+        mode: '0644'
+
+    - name: Reload PostgreSQL service to apply changes
+      service:
+        name: postgresql
+        state: reloaded
+
+    - name: Restart PostgreSQL service to apply changes
+      service:
+        name: postgresql
+        state: restarted
+

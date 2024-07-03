@@ -1,0 +1,1 @@
+debian_10 ansible_host=192.168.150.166 ansible_user=ansible ansible_password=ansible
